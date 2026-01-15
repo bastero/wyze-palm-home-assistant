@@ -13,6 +13,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     CONF_ACCESS_TOKEN,
+    CONF_API_KEY,
+    CONF_KEY_ID,
     CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -27,6 +29,7 @@ from .const import (
     UNLOCK_METHOD_PIN,
     UNLOCK_METHOD_UNKNOWN,
 )
+from .wyze_api import WyzeApiClient, WyzeApiError, WyzeAuthError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,7 +46,7 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """Initialize the coordinator."""
         self.entry = entry
-        self._client: Any = None
+        self._client: WyzeApiClient | None = None
         self._locks: dict[str, Any] = {}
         self._last_events: dict[str, list[Any]] = {}
         self._failed_attempts: dict[str, int] = {}
@@ -59,125 +62,99 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_setup(self) -> None:
         """Set up the Wyze client."""
-        await self._async_init_client()
+        self._client = WyzeApiClient(
+            api_key=self.entry.data[CONF_API_KEY],
+            key_id=self.entry.data[CONF_KEY_ID],
+            access_token=self.entry.data.get(CONF_ACCESS_TOKEN),
+            refresh_token=self.entry.data.get(CONF_REFRESH_TOKEN),
+        )
 
-    async def _async_init_client(self) -> None:
-        """Initialize the Wyze client."""
+        # If no access token, login
+        if not self.entry.data.get(CONF_ACCESS_TOKEN):
+            await self._async_login()
+
+    async def _async_login(self) -> None:
+        """Login to Wyze API."""
         try:
-            self._client = await self.hass.async_add_executor_job(
-                self._create_client
+            result = await self._client.login(
+                email=self.entry.data[CONF_EMAIL],
+                password=self.entry.data[CONF_PASSWORD],
             )
-        except Exception as err:
-            _LOGGER.error("Failed to initialize Wyze client: %s", err)
-            raise ConfigEntryAuthFailed("Failed to authenticate with Wyze") from err
 
-    def _create_client(self) -> Any:
-        """Create Wyze client (runs in executor)."""
-        from wyze_sdk import Client
-
-        email = self.entry.data.get(CONF_EMAIL)
-        password = self.entry.data.get(CONF_PASSWORD)
-
-        # Try using stored tokens first
-        access_token = self.entry.data.get(CONF_ACCESS_TOKEN)
-
-        if access_token:
-            try:
-                client = Client(token=access_token)
-                # Test the token by making a simple call
-                return client
-            except Exception:
-                _LOGGER.debug("Stored token invalid, re-authenticating")
-
-        # Authenticate with credentials
-        client = Client()
-        response = client.login(email=email, password=password)
-
-        # Extract tokens
-        access_token = None
-        refresh_token = None
-
-        if hasattr(response, "access_token"):
-            access_token = response.access_token
-        elif isinstance(response, dict):
-            access_token = response.get("access_token")
-
-        if hasattr(response, "refresh_token"):
-            refresh_token = response.refresh_token
-        elif isinstance(response, dict):
-            refresh_token = response.get("refresh_token")
-
-        # Store new tokens
-        if access_token:
+            # Update stored tokens
             self.hass.config_entries.async_update_entry(
                 self.entry,
                 data={
                     **self.entry.data,
-                    CONF_ACCESS_TOKEN: access_token,
-                    CONF_REFRESH_TOKEN: refresh_token,
+                    CONF_ACCESS_TOKEN: result.get("access_token"),
+                    CONF_REFRESH_TOKEN: result.get("refresh_token"),
                 },
             )
-
-        return Client(token=access_token) if access_token else client
+        except WyzeAuthError as err:
+            raise ConfigEntryAuthFailed("Failed to authenticate with Wyze") from err
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from Wyze API."""
         if self._client is None:
-            await self._async_init_client()
+            await self._async_setup()
 
         try:
-            data = await self.hass.async_add_executor_job(self._fetch_locks_data)
+            data = await self._fetch_locks_data()
             await self._process_events(data)
             return data
-        except Exception as err:
-            error_str = str(err).lower()
-            if "401" in error_str or "unauthorized" in error_str or "token" in error_str:
-                # Token expired, try to refresh
-                try:
-                    await self._async_init_client()
-                    return await self.hass.async_add_executor_job(self._fetch_locks_data)
-                except Exception as refresh_err:
-                    raise ConfigEntryAuthFailed(
-                        "Authentication failed, please re-authenticate"
-                    ) from refresh_err
+        except WyzeAuthError as err:
+            # Token expired, try to re-login
+            try:
+                await self._async_login()
+                return await self._fetch_locks_data()
+            except WyzeAuthError:
+                raise ConfigEntryAuthFailed(
+                    "Authentication failed, please re-authenticate"
+                ) from err
+        except WyzeApiError as err:
             raise UpdateFailed(f"Error communicating with Wyze API: {err}") from err
 
-    def _fetch_locks_data(self) -> dict[str, Any]:
-        """Fetch lock data from Wyze API (runs in executor)."""
+    async def _fetch_locks_data(self) -> dict[str, Any]:
+        """Fetch lock data from Wyze API."""
         locks_data: dict[str, Any] = {"locks": {}}
 
         try:
-            locks = self._client.locks.list()
-        except Exception as err:
+            locks = await self._client.get_locks()
+        except WyzeApiError as err:
             _LOGGER.error("Failed to fetch locks: %s", err)
             raise
 
         for lock in locks:
-            lock_mac = lock.mac
+            lock_mac = lock.get("mac", lock.get("device_mac"))
+            lock_model = lock.get("product_model", "")
 
+            if not lock_mac:
+                continue
+
+            # Get detailed lock info
             try:
-                lock_info = self._client.locks.info(device_mac=lock_mac)
-            except Exception as err:
+                lock_info = await self._client.get_lock_info(lock_mac, lock_model)
+            except WyzeApiError as err:
                 _LOGGER.warning("Failed to get info for lock %s: %s", lock_mac, err)
-                lock_info = lock
+                lock_info = {}
 
-            # Get lock events/history
+            # Get lock events
             events = []
             try:
-                events = self._client.locks.get_records(device_mac=lock_mac, limit=20)
-            except Exception as err:
+                events = await self._client.get_lock_events(lock_mac, lock_model, limit=20)
+            except WyzeApiError as err:
                 _LOGGER.debug("Failed to get events for lock %s: %s", lock_mac, err)
 
             locks_data["locks"][lock_mac] = {
                 "mac": lock_mac,
-                "nickname": getattr(lock, "nickname", None) or lock_mac,
-                "model": getattr(lock, "product_model", "Palm Lock"),
-                "is_locked": getattr(lock_info, "is_locked", None),
-                "door_open": getattr(lock_info, "door_open", None),
-                "battery": getattr(lock_info, "battery", None),
-                "online": getattr(lock_info, "online", True),
-                "auto_lock_time": getattr(lock_info, "auto_lock_time", 0),
-                "events": events if events else [],
+                "model": lock_model,
+                "nickname": lock.get("nickname", lock_mac),
+                "is_locked": lock_info.get("is_locked"),
+                "door_open": lock_info.get("door_open"),
+                "battery": lock_info.get("battery"),
+                "online": lock_info.get("online", True),
+                "auto_lock_time": lock_info.get("auto_lock_time", 0),
+                "events": events,
                 "raw_lock": lock,
                 "raw_info": lock_info,
             }
@@ -191,7 +168,7 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             last_processed = self._last_events.get(lock_mac, [])
 
             for event in events:
-                event_id = getattr(event, "event_id", None) or id(event)
+                event_id = event.get("event_id") or id(event)
                 if event_id in last_processed:
                     continue
 
@@ -203,7 +180,7 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "device_id": lock_mac,
                             "method": self._get_unlock_method(event),
                             "user": self._get_event_user(event),
-                            "timestamp": getattr(event, "event_ts", None),
+                            "timestamp": event.get("event_ts"),
                         },
                     )
                 elif event_type == EVENT_LOCK:
@@ -212,7 +189,7 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         {
                             "device_id": lock_mac,
                             "method": self._get_unlock_method(event),
-                            "timestamp": getattr(event, "event_ts", None),
+                            "timestamp": event.get("event_ts"),
                         },
                     )
                 elif event_type == EVENT_FAILED:
@@ -223,22 +200,20 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         EVENT_FAILED,
                         {
                             "device_id": lock_mac,
-                            "timestamp": getattr(event, "event_ts", None),
+                            "timestamp": event.get("event_ts"),
                         },
                     )
 
             # Update last processed events
             self._last_events[lock_mac] = [
-                getattr(e, "event_id", None) or id(e) for e in events[:20]
+                e.get("event_id") or id(e) for e in events[:20]
             ]
 
-    def _get_event_type(self, event: Any) -> str | None:
+    def _get_event_type(self, event: dict[str, Any]) -> str | None:
         """Determine the event type."""
-        event_type = getattr(event, "event_type", None) or getattr(event, "type", None)
-        if event_type is None:
-            return None
-
+        event_type = event.get("event_type") or event.get("type", "")
         event_str = str(event_type).lower()
+
         if "unlock" in event_str:
             return EVENT_UNLOCK
         if "lock" in event_str:
@@ -247,13 +222,11 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return EVENT_FAILED
         return None
 
-    def _get_unlock_method(self, event: Any) -> str:
+    def _get_unlock_method(self, event: dict[str, Any]) -> str:
         """Get the unlock method from event."""
-        method = getattr(event, "unlock_method", None) or getattr(event, "type", None)
-        if method is None:
-            return UNLOCK_METHOD_UNKNOWN
-
+        method = event.get("unlock_method") or event.get("type", "")
         method_str = str(method).lower()
+
         if "palm" in method_str:
             return UNLOCK_METHOD_PALM
         if "pin" in method_str or "keypad" in method_str:
@@ -266,9 +239,9 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return UNLOCK_METHOD_APP
         return UNLOCK_METHOD_UNKNOWN
 
-    def _get_event_user(self, event: Any) -> str | None:
+    def _get_event_user(self, event: dict[str, Any]) -> str | None:
         """Get the user from event."""
-        return getattr(event, "user_name", None) or getattr(event, "user", None)
+        return event.get("user_name") or event.get("user")
 
     def get_lock_data(self, lock_mac: str) -> dict[str, Any] | None:
         """Get data for a specific lock."""
@@ -282,36 +255,40 @@ class WyzePalmDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_lock(self, lock_mac: str) -> bool:
         """Lock a device."""
-        try:
-            await self.hass.async_add_executor_job(
-                self._client.locks.lock, lock_mac
-            )
-            await self.async_request_refresh()
-            return True
-        except Exception as err:
-            _LOGGER.error("Failed to lock device %s: %s", lock_mac, err)
+        lock_data = self.get_lock_data(lock_mac)
+        if not lock_data:
             return False
+
+        result = await self._client.lock(lock_mac, lock_data.get("model", ""))
+        if result:
+            await self.async_request_refresh()
+        return result
 
     async def async_unlock(self, lock_mac: str) -> bool:
         """Unlock a device."""
-        try:
-            await self.hass.async_add_executor_job(
-                self._client.locks.unlock, lock_mac
-            )
-            await self.async_request_refresh()
-            return True
-        except Exception as err:
-            _LOGGER.error("Failed to unlock device %s: %s", lock_mac, err)
+        lock_data = self.get_lock_data(lock_mac)
+        if not lock_data:
             return False
+
+        result = await self._client.unlock(lock_mac, lock_data.get("model", ""))
+        if result:
+            await self.async_request_refresh()
+        return result
 
     async def async_set_auto_lock(self, lock_mac: str, seconds: int) -> bool:
         """Set auto-lock time for a device."""
-        try:
-            await self.hass.async_add_executor_job(
-                lambda: self._client.locks.set_auto_lock_time(lock_mac, seconds)
-            )
-            await self.async_request_refresh()
-            return True
-        except Exception as err:
-            _LOGGER.error("Failed to set auto-lock for %s: %s", lock_mac, err)
+        lock_data = self.get_lock_data(lock_mac)
+        if not lock_data:
             return False
+
+        result = await self._client.set_auto_lock_time(
+            lock_mac, lock_data.get("model", ""), seconds
+        )
+        if result:
+            await self.async_request_refresh()
+        return result
+
+    async def async_shutdown(self) -> None:
+        """Shutdown the coordinator."""
+        if self._client:
+            await self._client.close()

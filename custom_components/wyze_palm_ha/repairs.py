@@ -12,7 +12,8 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
-from .const import CONF_ACCESS_TOKEN, CONF_REFRESH_TOKEN, DOMAIN
+from .const import CONF_ACCESS_TOKEN, CONF_API_KEY, CONF_KEY_ID, CONF_REFRESH_TOKEN, DOMAIN
+from .wyze_api import WyzeApiClient, WyzeAuthError
 
 ISSUE_AUTH_EXPIRED = "auth_expired"
 ISSUE_API_ERROR = "api_error"
@@ -66,18 +67,18 @@ class AuthExpiredRepairFlow(RepairsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Try to re-authenticate
             entry = self._hass.config_entries.async_get_entry(self._entry_id)
             if entry is None:
                 return self.async_abort(reason="entry_not_found")
 
             try:
                 tokens = await self._async_validate_credentials(
+                    entry.data[CONF_API_KEY],
+                    entry.data[CONF_KEY_ID],
                     entry.data[CONF_EMAIL],
                     user_input[CONF_PASSWORD],
                 )
 
-                # Update entry with new tokens
                 self._hass.config_entries.async_update_entry(
                     entry,
                     data={
@@ -88,16 +89,15 @@ class AuthExpiredRepairFlow(RepairsFlow):
                     },
                 )
 
-                # Remove the issue
                 ir.async_delete_issue(self._hass, DOMAIN, self._issue_id)
-
-                # Reload the entry
                 await self._hass.config_entries.async_reload(self._entry_id)
 
                 return self.async_create_entry(data={})
 
-            except Exception:
+            except WyzeAuthError:
                 errors["base"] = "invalid_auth"
+            except Exception:
+                errors["base"] = "unknown"
 
         entry = self._hass.config_entries.async_get_entry(self._entry_id)
         email = entry.data.get(CONF_EMAIL, "unknown") if entry else "unknown"
@@ -110,35 +110,14 @@ class AuthExpiredRepairFlow(RepairsFlow):
         )
 
     async def _async_validate_credentials(
-        self, email: str, password: str
+        self, api_key: str, key_id: str, email: str, password: str
     ) -> dict[str, Any]:
         """Validate Wyze credentials and return tokens."""
-
-        def _login() -> dict[str, Any]:
-            from wyze_sdk import Client
-
-            client = Client()
-            response = client.login(email=email, password=password)
-
-            access_token = None
-            refresh_token = None
-
-            if hasattr(response, "access_token"):
-                access_token = response.access_token
-            elif isinstance(response, dict):
-                access_token = response.get("access_token")
-
-            if hasattr(response, "refresh_token"):
-                refresh_token = response.refresh_token
-            elif isinstance(response, dict):
-                refresh_token = response.get("refresh_token")
-
-            return {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-            }
-
-        return await self._hass.async_add_executor_job(_login)
+        client = WyzeApiClient(api_key=api_key, key_id=key_id)
+        try:
+            return await client.login(email=email, password=password)
+        finally:
+            await client.close()
 
 
 def create_auth_expired_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -6,6 +6,8 @@ from typing import Final
 DOMAIN: Final = "wyze_palm_ha"
 
 # Configuration keys
+CONF_API_KEY: Final = "api_key"
+CONF_KEY_ID: Final = "key_id"
 CONF_ACCESS_TOKEN: Final = "access_token"
 CONF_REFRESH_TOKEN: Final = "refresh_token"
 CONF_USER_ID: Final = "user_id"

@@ -3,8 +3,10 @@
     "step": {
       "user": {
         "title": "Wyze Palm Setup",
-        "description": "Enter your Wyze account credentials to connect your Palm locks.",
+        "description": "Enter your Wyze API credentials. Get your API Key and Key ID from the [Wyze Developer Console]({api_console_url}).",
         "data": {
+          "api_key": "API Key",
+          "key_id": "Key ID",
           "email": "Email",
           "password": "Password"
         }
@@ -18,8 +20,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to Wyze. Please check your internet connection.",
-      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Failed to connect to Wyze. Please check your internet connection and API credentials.",
+      "invalid_auth": "Invalid credentials. Please check your API Key, Key ID, email, and password.",
       "unknown": "An unexpected error occurred."
     },
     "abort": {
