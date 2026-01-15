@@ -1,0 +1,124 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Wyze Palm Setup",
+        "description": "Enter your Wyze account credentials to connect your Palm locks.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Wyze Palm",
+        "description": "Your Wyze session has expired. Please enter your password for {email} to re-authenticate.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Wyze. Please check your internet connection.",
+      "invalid_auth": "Invalid email or password.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Wyze account is already configured.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wyze Palm Options",
+        "description": "Configure your Wyze Palm integration settings.",
+        "data": {
+          "scan_interval": "Update interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery": {
+        "name": "Battery"
+      },
+      "last_unlock_method": {
+        "name": "Last unlock method"
+      },
+      "last_unlock_user": {
+        "name": "Last unlock user"
+      },
+      "failed_attempts": {
+        "name": "Failed palm attempts"
+      },
+      "auto_lock_time": {
+        "name": "Auto-lock time"
+      }
+    },
+    "binary_sensor": {
+      "door": {
+        "name": "Door"
+      },
+      "connected": {
+        "name": "Connected"
+      }
+    },
+    "number": {
+      "auto_lock_time_setting": {
+        "name": "Auto-lock delay"
+      }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "unlocked": "Lock was unlocked",
+      "unlocked_palm": "Lock was unlocked by palm",
+      "locked": "Lock was locked",
+      "failed_attempt": "Failed palm attempt detected",
+      "door_opened": "Door was opened",
+      "door_closed": "Door was closed",
+      "battery_low": "Battery is low"
+    }
+  },
+  "issues": {
+    "auth_expired": {
+      "title": "Wyze authentication expired",
+      "description": "Your Wyze session for {email} has expired. Please re-enter your password to reconnect."
+    },
+    "api_error": {
+      "title": "Wyze API error",
+      "description": "An error occurred communicating with Wyze: {error}. This may be temporary."
+    },
+    "device_offline": {
+      "title": "Wyze device offline",
+      "description": "The device {device_name} appears to be offline. Check the device's power and network connection."
+    },
+    "rate_limited": {
+      "title": "Wyze API rate limited",
+      "description": "Too many requests to Wyze API. The integration will automatically retry with reduced frequency."
+    }
+  },
+  "repairs": {
+    "auth_expired": {
+      "title": "Re-authenticate Wyze",
+      "description": "Your Wyze session has expired. Enter your password to reconnect."
+    }
+  },
+  "services": {
+    "set_auto_lock": {
+      "name": "Set auto-lock time",
+      "description": "Configure the auto-lock delay for a Wyze Palm lock.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The MAC address of the lock device."
+        },
+        "auto_lock_time": {
+          "name": "Auto-lock time",
+          "description": "Time in seconds before the lock automatically locks (0 to disable)."
+        }
+      }
+    }
+  }
+}

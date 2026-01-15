@@ -1,0 +1,13 @@
+{
+  "domain": "wyze_palm_ha",
+  "name": "Wyze Palm",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/yourusername/wyze_palm_ha",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/yourusername/wyze_palm_ha/issues",
+  "requirements": ["wyze-sdk>=2.0.0"],
+  "version": "0.1.0",
+  "homeassistant": "2024.1.0"
+}

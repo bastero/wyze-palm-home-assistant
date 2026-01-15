@@ -1,0 +1,21 @@
+set_auto_lock:
+  name: Set auto-lock time
+  description: Configure the auto-lock delay for a Wyze Palm lock.
+  fields:
+    device_id:
+      name: Device ID
+      description: The MAC address of the lock device.
+      required: true
+      example: "ABCD1234567890"
+      selector:
+        text:
+    auto_lock_time:
+      name: Auto-lock time
+      description: Time in seconds before the lock automatically locks (0 to disable).
+      required: true
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 1800
+          unit_of_measurement: seconds
