@@ -5,8 +5,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from wyze_sdk import Client
-from wyze_sdk.errors import WyzeApiError
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -53,15 +51,15 @@ class WyzePalmConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_EMAIL],
                     user_input[CONF_PASSWORD],
                 )
-            except WyzeApiError as err:
-                _LOGGER.error("Failed to authenticate with Wyze: %s", err)
-                if "401" in str(err) or "invalid" in str(err).lower():
-                    errors["base"] = "invalid_auth"
-                else:
-                    errors["base"] = "cannot_connect"
             except Exception as err:
-                _LOGGER.exception("Unexpected error during authentication: %s", err)
-                errors["base"] = "unknown"
+                _LOGGER.error("Failed to authenticate with Wyze: %s", err)
+                error_str = str(err).lower()
+                if "401" in error_str or "invalid" in error_str or "credential" in error_str:
+                    errors["base"] = "invalid_auth"
+                elif "connect" in error_str or "timeout" in error_str:
+                    errors["base"] = "cannot_connect"
+                else:
+                    errors["base"] = "unknown"
             else:
                 return self.async_create_entry(
                     title=f"Wyze Palm ({user_input[CONF_EMAIL]})",
@@ -85,11 +83,29 @@ class WyzePalmConfigFlow(ConfigFlow, domain=DOMAIN):
         """Validate Wyze credentials and return tokens."""
 
         def _login() -> dict[str, Any]:
+            # Import here to avoid issues if package not installed
+            from wyze_sdk import Client
+
             client = Client()
             response = client.login(email=email, password=password)
+
+            # Extract tokens from response
+            access_token = None
+            refresh_token = None
+
+            if hasattr(response, "access_token"):
+                access_token = response.access_token
+            elif isinstance(response, dict):
+                access_token = response.get("access_token")
+
+            if hasattr(response, "refresh_token"):
+                refresh_token = response.refresh_token
+            elif isinstance(response, dict):
+                refresh_token = response.get("refresh_token")
+
             return {
-                "access_token": response.get("access_token"),
-                "refresh_token": response.get("refresh_token"),
+                "access_token": access_token,
+                "refresh_token": refresh_token,
             }
 
         return await self.hass.async_add_executor_job(_login)
@@ -113,10 +129,8 @@ class WyzePalmConfigFlow(ConfigFlow, domain=DOMAIN):
                     reauth_entry.data[CONF_EMAIL],
                     user_input[CONF_PASSWORD],
                 )
-            except WyzeApiError:
-                errors["base"] = "invalid_auth"
             except Exception:
-                errors["base"] = "unknown"
+                errors["base"] = "invalid_auth"
             else:
                 return self.async_update_reload_and_abort(
                     reauth_entry,

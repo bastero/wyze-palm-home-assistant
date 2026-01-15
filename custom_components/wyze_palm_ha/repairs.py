@@ -4,8 +4,6 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-from wyze_sdk import Client
-from wyze_sdk.errors import WyzeApiError
 
 from homeassistant import data_entry_flow
 from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
@@ -98,10 +96,8 @@ class AuthExpiredRepairFlow(RepairsFlow):
 
                 return self.async_create_entry(data={})
 
-            except WyzeApiError:
-                errors["base"] = "invalid_auth"
             except Exception:
-                errors["base"] = "unknown"
+                errors["base"] = "invalid_auth"
 
         entry = self._hass.config_entries.async_get_entry(self._entry_id)
         email = entry.data.get(CONF_EMAIL, "unknown") if entry else "unknown"
@@ -119,11 +115,27 @@ class AuthExpiredRepairFlow(RepairsFlow):
         """Validate Wyze credentials and return tokens."""
 
         def _login() -> dict[str, Any]:
+            from wyze_sdk import Client
+
             client = Client()
             response = client.login(email=email, password=password)
+
+            access_token = None
+            refresh_token = None
+
+            if hasattr(response, "access_token"):
+                access_token = response.access_token
+            elif isinstance(response, dict):
+                access_token = response.get("access_token")
+
+            if hasattr(response, "refresh_token"):
+                refresh_token = response.refresh_token
+            elif isinstance(response, dict):
+                refresh_token = response.get("refresh_token")
+
             return {
-                "access_token": response.get("access_token"),
-                "refresh_token": response.get("refresh_token"),
+                "access_token": access_token,
+                "refresh_token": refresh_token,
             }
 
         return await self._hass.async_add_executor_job(_login)
