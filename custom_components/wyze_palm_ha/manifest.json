@@ -7,7 +7,7 @@
   "documentation": "https://github.com/bastero/wyze-palm-home-assistant",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/bastero/wyze-palm-home-assistant/issues",
-  "requirements": ["wyze-sdk>=1.10.0"],
+  "requirements": ["wyze-sdk==2.2.0"],
   "version": "0.1.0",
   "homeassistant": "2024.1.0"
 }
