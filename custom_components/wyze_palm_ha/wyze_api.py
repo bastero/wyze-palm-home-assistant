@@ -350,8 +350,10 @@ class WyzeApiClient:
 
         try:
             data = await self._api_request(PATH_GET_LOCK_INFO, payload)
+            _LOGGER.warning("Lock info raw response for %s: %s", device_mac, data)
             return self._parse_property_list(data)
-        except WyzeApiError:
+        except WyzeApiError as err:
+            _LOGGER.warning("get_property_list failed for %s: %s, trying get_device_info", device_mac, err)
             return await self.get_device_info(device_mac, device_model)
 
     async def get_device_info(self, device_mac: str, device_model: str) -> dict[str, Any]:
@@ -361,7 +363,9 @@ class WyzeApiClient:
             "device_model": device_model,
         }
 
-        return await self._api_request(PATH_GET_DEVICE_INFO, payload)
+        data = await self._api_request(PATH_GET_DEVICE_INFO, payload)
+        _LOGGER.warning("Device info raw response for %s: %s", device_mac, data)
+        return data
 
     def _parse_property_list(self, data: dict[str, Any]) -> dict[str, Any]:
         """Parse property list response into a usable dict."""
