@@ -23,6 +23,9 @@ PATH_GET_DEVICE_INFO = "/app/v2/device/get_device_info"
 PATH_GET_LOCK_INFO = "/app/v2/device/get_property_list"
 PATH_RUN_ACTION = "/app/v2/auto/run_action"
 PATH_GET_EVENT_LIST = "/app/v2/device/get_event_list"
+# Lock-specific endpoints
+PATH_GET_LOCK_STATUS = "/openapi/lock/v1/status"
+PATH_LOCK_CONTROL = "/openapi/lock/v1/control"
 
 # Wyze app constants
 WYZE_APP_NAME = "com.hualai.WyzeCam"
@@ -343,6 +346,16 @@ class WyzeApiClient:
 
     async def get_lock_info(self, device_mac: str, device_model: str) -> dict[str, Any]:
         """Get detailed lock information."""
+        # Try lock-specific status endpoint first
+        try:
+            lock_status = await self._get_lock_status(device_mac)
+            if lock_status:
+                _LOGGER.warning("Lock status API response for %s: %s", device_mac, lock_status)
+                return lock_status
+        except WyzeApiError as err:
+            _LOGGER.debug("Lock status API failed: %s", err)
+
+        # Fall back to property list
         payload = {
             "device_mac": device_mac,
             "device_model": device_model,
@@ -350,11 +363,55 @@ class WyzeApiClient:
 
         try:
             data = await self._api_request(PATH_GET_LOCK_INFO, payload)
-            _LOGGER.warning("Lock info raw response for %s: %s", device_mac, data)
+            _LOGGER.warning("Lock property list for %s: %s", device_mac, data)
             return self._parse_property_list(data)
         except WyzeApiError as err:
             _LOGGER.warning("get_property_list failed for %s: %s, trying get_device_info", device_mac, err)
             return await self.get_device_info(device_mac, device_model)
+
+    async def _get_lock_status(self, device_mac: str) -> dict[str, Any] | None:
+        """Get lock status using lock-specific API."""
+        session = await self._get_session()
+
+        payload = {
+            **self._get_base_payload(),
+            "access_token": self._access_token,
+            "device_id": device_mac,
+            "device_mac": device_mac,
+        }
+
+        try:
+            async with session.post(
+                f"{WYZE_API_URL}{PATH_GET_LOCK_STATUS}",
+                json=payload,
+                headers=self._get_headers(include_auth=True),
+            ) as response:
+                data = await response.json()
+                _LOGGER.warning("Lock status raw API response: %s", data)
+
+                if response.status != 200:
+                    return None
+
+                # Parse lock status response
+                result = {}
+                status_data = data.get("data", data)
+
+                if "lock_state" in status_data:
+                    # 1 = locked, 0 = unlocked
+                    result["is_locked"] = status_data["lock_state"] == 1
+                if "door_state" in status_data:
+                    # 1 = closed, 0 = open (inverted for Palm Lock)
+                    result["door_open"] = status_data["door_state"] == 0
+                if "battery" in status_data:
+                    result["battery"] = status_data["battery"]
+                if "online" in status_data:
+                    result["online"] = status_data["online"]
+
+                return result if result else None
+
+        except Exception as err:
+            _LOGGER.debug("Lock status API error: %s", err)
+            return None
 
     async def get_device_info(self, device_mac: str, device_model: str) -> dict[str, Any]:
         """Get basic device information."""
