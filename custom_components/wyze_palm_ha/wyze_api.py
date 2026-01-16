@@ -371,48 +371,82 @@ class WyzeApiClient:
             return await self.get_device_info(device_mac, device_model)
 
     async def _get_lock_status(self, device_mac: str) -> dict[str, Any] | None:
-        """Get lock status using lock-specific API."""
+        """Get lock status using various lock-specific APIs."""
         session = await self._get_session()
 
-        payload = {
-            **self._get_base_payload(),
-            "access_token": self._access_token,
-            "device_id": device_mac,
-            "device_mac": device_mac,
-        }
+        # Try multiple API endpoints for lock status
+        endpoints = [
+            "/openapi/lock/v1/status",
+            "/plugin/locking/v1/get_lock_status",
+            "/app/v2/device/get_device_property_list",
+            "/plugin/pvlock/v1/get_status",  # Palm Vein Lock specific
+        ]
 
-        try:
-            async with session.post(
-                f"{WYZE_API_URL}{PATH_GET_LOCK_STATUS}",
-                json=payload,
-                headers=self._get_headers(include_auth=True),
-            ) as response:
-                data = await response.json()
-                _LOGGER.warning("Lock status raw API response: %s", data)
+        for endpoint in endpoints:
+            payload = {
+                **self._get_base_payload(),
+                "access_token": self._access_token,
+                "device_id": device_mac,
+                "device_mac": device_mac,
+                "keys": "P3,P5,P8,P2001,P2002",  # Request specific properties
+            }
 
-                if response.status != 200:
-                    return None
+            try:
+                async with session.post(
+                    f"{WYZE_API_URL}{endpoint}",
+                    json=payload,
+                    headers=self._get_headers(include_auth=True),
+                ) as response:
+                    data = await response.json()
 
-                # Parse lock status response
-                result = {}
-                status_data = data.get("data", data)
+                    # Log successful responses
+                    if response.status == 200 and data.get("code") in (None, "1", 1, "0", 0):
+                        _LOGGER.warning("Lock API %s response: %s", endpoint, data)
 
-                if "lock_state" in status_data:
-                    # 1 = locked, 0 = unlocked
-                    result["is_locked"] = status_data["lock_state"] == 1
-                if "door_state" in status_data:
-                    # 1 = closed, 0 = open (inverted for Palm Lock)
-                    result["door_open"] = status_data["door_state"] == 0
-                if "battery" in status_data:
-                    result["battery"] = status_data["battery"]
-                if "online" in status_data:
-                    result["online"] = status_data["online"]
+                        # Try to parse any useful data
+                        result = self._parse_lock_response(data)
+                        if result:
+                            return result
 
-                return result if result else None
+            except Exception as err:
+                _LOGGER.debug("Lock API %s error: %s", endpoint, err)
+                continue
 
-        except Exception as err:
-            _LOGGER.debug("Lock status API error: %s", err)
-            return None
+        return None
+
+    def _parse_lock_response(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Parse various lock API response formats."""
+        result = {}
+
+        # Try different response structures
+        status_data = data.get("data", data)
+
+        # Direct lock_state field
+        if "lock_state" in status_data:
+            result["is_locked"] = status_data["lock_state"] in (1, "1", True, "locked")
+
+        # Direct door_state field
+        if "door_state" in status_data:
+            # For Palm Lock: 1 = closed, 0 = open
+            result["door_open"] = status_data["door_state"] in (0, "0", False, "open")
+
+        # Battery
+        if "battery" in status_data:
+            try:
+                result["battery"] = int(status_data["battery"])
+            except (ValueError, TypeError):
+                pass
+
+        # Property list format
+        if "property_list" in status_data:
+            prop_result = self._parse_property_list(status_data)
+            result.update(prop_result)
+
+        # Online status
+        if "online" in status_data:
+            result["online"] = status_data["online"] in (1, "1", True)
+
+        return result if result else None
 
     async def get_device_info(self, device_mac: str, device_model: str) -> dict[str, Any]:
         """Get basic device information."""
