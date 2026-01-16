@@ -1,7 +1,6 @@
 """Direct Wyze API client without external dependencies."""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import time
@@ -17,7 +16,7 @@ WYZE_API_URL = "https://api.wyzecam.com"
 WYZE_AUTH_URL = "https://auth-prod.api.wyze.com"
 
 # API paths
-PATH_LOGIN = "/user/login"
+PATH_LOGIN = "/api/user/login"
 PATH_REFRESH_TOKEN = "/app/user/refresh_token"
 PATH_GET_OBJECT_LIST = "/app/v2/home_page/get_object_list"
 PATH_GET_DEVICE_INFO = "/app/v2/device/get_device_info"
@@ -25,9 +24,9 @@ PATH_GET_LOCK_INFO = "/app/v2/device/get_property_list"
 PATH_RUN_ACTION = "/app/v2/auto/run_action"
 PATH_GET_EVENT_LIST = "/app/v2/device/get_event_list"
 
-# Wyze app constants (for API compatibility)
+# Wyze app constants
 WYZE_APP_NAME = "com.hualai.WyzeCam"
-WYZE_APP_VERSION = "2.50.0"
+WYZE_APP_VERSION = "2.50.0.8347"
 WYZE_PHONE_ID = str(uuid.uuid4())
 WYZE_SC = "a626948714654571f64ce589dced5963"
 WYZE_SV = "e1fe392906d54888a9b99b88de4162d7"
@@ -84,14 +83,18 @@ class WyzeApiClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    def _get_headers(self) -> dict[str, str]:
+    def _get_headers(self, include_auth: bool = False) -> dict[str, str]:
         """Get common headers for API requests."""
-        return {
+        headers = {
             "Content-Type": "application/json",
             "User-Agent": f"{WYZE_APP_NAME}/{WYZE_APP_VERSION}",
-            "apikey": self._api_key,
-            "keyid": self._key_id,
+            "Phone-Id": WYZE_PHONE_ID,
+            "Apikey": self._api_key,
+            "Keyid": self._key_id,
         }
+        if include_auth and self._access_token:
+            headers["Authorization"] = self._access_token
+        return headers
 
     def _get_base_payload(self) -> dict[str, Any]:
         """Get base payload for API requests."""
@@ -110,7 +113,7 @@ class WyzeApiClient:
         """Login with email and password to get tokens."""
         session = await self._get_session()
 
-        # Hash the password
+        # Try with MD5 hashed password first (Wyze's standard method)
         password_hash = hashlib.md5(
             hashlib.md5(password.encode()).hexdigest().encode()
         ).hexdigest()
@@ -119,32 +122,54 @@ class WyzeApiClient:
             **self._get_base_payload(),
             "email": email,
             "password": password_hash,
+            "api_key": self._api_key,
+            "key_id": self._key_id,
         }
+
+        _LOGGER.debug("Attempting login for email: %s", email)
 
         try:
             async with session.post(
-                f"{WYZE_API_URL}{PATH_LOGIN}",
+                f"{WYZE_AUTH_URL}{PATH_LOGIN}",
                 json=payload,
                 headers=self._get_headers(),
             ) as response:
-                data = await response.json()
+                response_text = await response.text()
+                _LOGGER.debug("Login response status: %s", response.status)
 
-                if data.get("code") != "1":
-                    raise WyzeAuthError(
-                        data.get("msg", "Login failed"),
-                        code=int(data.get("code", 0)),
-                    )
+                try:
+                    data = await response.json()
+                except Exception:
+                    _LOGGER.error("Failed to parse response: %s", response_text[:500])
+                    raise WyzeApiError(f"Invalid response from Wyze API")
 
-                result = data.get("data", {})
+                _LOGGER.debug("Login response code: %s, msg: %s",
+                            data.get("code"), data.get("msg", data.get("message")))
+
+                # Check for success - Wyze uses various success indicators
+                code = str(data.get("code", ""))
+                if code not in ("1", "0", ""):
+                    msg = data.get("msg") or data.get("message") or "Login failed"
+                    _LOGGER.error("Login failed with code %s: %s", code, msg)
+                    raise WyzeAuthError(msg, code=int(code) if code.isdigit() else None)
+
+                result = data.get("data", data)
                 self._access_token = result.get("access_token")
                 self._refresh_token = result.get("refresh_token")
 
+                if not self._access_token:
+                    _LOGGER.error("No access token in response: %s", data)
+                    raise WyzeAuthError("No access token received")
+
+                _LOGGER.debug("Login successful, got access token")
                 return {
                     "access_token": self._access_token,
                     "refresh_token": self._refresh_token,
                     "user_id": result.get("user_id"),
                 }
+
         except aiohttp.ClientError as err:
+            _LOGGER.error("Connection error during login: %s", err)
             raise WyzeApiError(f"Connection error: {err}") from err
 
     async def refresh_tokens(self) -> dict[str, Any]:
@@ -167,13 +192,14 @@ class WyzeApiClient:
             ) as response:
                 data = await response.json()
 
-                if data.get("code") != "1":
+                code = str(data.get("code", ""))
+                if code not in ("1", "0", ""):
                     raise WyzeAuthError(
                         data.get("msg", "Token refresh failed"),
-                        code=int(data.get("code", 0)),
+                        code=int(code) if code.isdigit() else None,
                     )
 
-                result = data.get("data", {})
+                result = data.get("data", data)
                 self._access_token = result.get("access_token")
                 self._refresh_token = result.get("refresh_token")
 
@@ -206,25 +232,24 @@ class WyzeApiClient:
             async with session.post(
                 f"{WYZE_API_URL}{path}",
                 json=request_payload,
-                headers=self._get_headers(),
+                headers=self._get_headers(include_auth=True),
             ) as response:
                 data = await response.json()
 
-                code = data.get("code")
+                code = str(data.get("code", ""))
 
                 # Handle auth errors
-                if code in ("2001", "2002", 2001, 2002) and retry_auth:
-                    # Token expired, try to refresh
+                if code in ("2001", "2002") and retry_auth:
                     try:
                         await self.refresh_tokens()
                         return await self._api_request(path, payload, retry_auth=False)
                     except WyzeAuthError:
                         raise WyzeAuthError("Authentication expired")
 
-                if code != "1" and code != 1:
+                if code not in ("1", "0", ""):
                     raise WyzeApiError(
                         data.get("msg", "API request failed"),
-                        code=int(code) if code else None,
+                        code=int(code) if code.isdigit() else None,
                     )
 
                 return data.get("data", {})
@@ -262,7 +287,6 @@ class WyzeApiClient:
             data = await self._api_request(PATH_GET_LOCK_INFO, payload)
             return self._parse_property_list(data)
         except WyzeApiError:
-            # Fall back to basic device info
             return await self.get_device_info(device_mac, device_model)
 
     async def get_device_info(self, device_mac: str, device_model: str) -> dict[str, Any]:
@@ -310,7 +334,7 @@ class WyzeApiClient:
             "device_mac": device_mac,
             "device_model": device_model,
             "count": limit,
-            "order_by": 2,  # Descending by time
+            "order_by": 2,
         }
 
         try:
@@ -332,7 +356,6 @@ class WyzeApiClient:
         self, device_mac: str, device_model: str, action: str
     ) -> bool:
         """Run a lock action."""
-        # Action values: remoteLock, remoteUnlock
         action_key = "remoteLock" if action == "lock" else "remoteUnlock"
 
         payload = {
