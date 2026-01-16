@@ -89,8 +89,8 @@ class WyzeApiClient:
             "Content-Type": "application/json",
             "User-Agent": f"{WYZE_APP_NAME}/{WYZE_APP_VERSION}",
             "Phone-Id": WYZE_PHONE_ID,
-            "Apikey": self._api_key,
-            "Keyid": self._key_id,
+            "apikey": self._api_key,
+            "keyid": self._key_id,
         }
         if include_auth and self._access_token:
             headers["Authorization"] = self._access_token
@@ -120,10 +120,8 @@ class WyzeApiClient:
 
         payload = {
             **self._get_base_payload(),
-            "email": email,
+            "email": email.lower(),
             "password": password_hash,
-            "api_key": self._api_key,
-            "key_id": self._key_id,
         }
 
         _LOGGER.debug("Attempting login for email: %s", email)
