@@ -389,8 +389,8 @@ class WyzeApiClient:
                 elif value == "0":
                     result["is_locked"] = False
                 # else leave it unset (unknown)
-            elif pid == "P5":  # Door state: 0=closed, 1=open
-                result["door_open"] = value == "1"
+            elif pid == "P5":  # Door state: 0=open, 1=closed (Palm Lock)
+                result["door_open"] = value == "0"
             elif pid == "P8":  # Battery percentage
                 try:
                     battery = int(value)
