@@ -475,11 +475,17 @@ class WyzeApiClient:
         self, device_mac: str, device_model: str, limit: int = 20
     ) -> list[dict[str, Any]]:
         """Get lock event history."""
+        # Get events from the last 7 days
+        end_time = int(time.time() * 1000)
+        begin_time = end_time - (7 * 24 * 60 * 60 * 1000)  # 7 days ago
+
         payload = {
             "device_mac": device_mac,
             "device_model": device_model,
             "count": limit,
             "order_by": 2,
+            "begin_time": begin_time,
+            "end_time": end_time,
         }
 
         try:
@@ -488,7 +494,7 @@ class WyzeApiClient:
             if events:
                 _LOGGER.warning("Lock events for %s: %s", device_mac, events[:3])  # Log first 3
             else:
-                _LOGGER.warning("No events returned for lock %s", device_mac)
+                _LOGGER.warning("No events returned for lock %s (response: %s)", device_mac, data)
             return events
         except WyzeApiError as err:
             _LOGGER.warning("Failed to get events for %s: %s", device_mac, err)
