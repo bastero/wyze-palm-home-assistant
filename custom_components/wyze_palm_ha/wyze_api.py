@@ -113,62 +113,82 @@ class WyzeApiClient:
         """Login with email and password to get tokens."""
         session = await self._get_session()
 
-        # Try with MD5 hashed password first (Wyze's standard method)
-        password_hash = hashlib.md5(
-            hashlib.md5(password.encode()).hexdigest().encode()
-        ).hexdigest()
+        # Try multiple password formats - Wyze API is inconsistent
+        password_formats = [
+            # Triple MD5 hash (some Wyze implementations)
+            hashlib.md5(hashlib.md5(hashlib.md5(password.encode()).hexdigest().encode()).hexdigest().encode()).hexdigest(),
+            # Double MD5 hash (standard Wyze app method)
+            hashlib.md5(hashlib.md5(password.encode()).hexdigest().encode()).hexdigest(),
+            # Single MD5 hash
+            hashlib.md5(password.encode()).hexdigest(),
+        ]
 
-        payload = {
-            **self._get_base_payload(),
-            "email": email.lower(),
-            "password": password_hash,
-        }
+        last_error = None
 
-        _LOGGER.debug("Attempting login for email: %s", email)
+        for i, password_hash in enumerate(password_formats):
+            _LOGGER.debug("Attempting login for email: %s (password format %d)", email, i + 1)
 
-        try:
-            async with session.post(
-                f"{WYZE_AUTH_URL}{PATH_LOGIN}",
-                json=payload,
-                headers=self._get_headers(),
-            ) as response:
-                response_text = await response.text()
-                _LOGGER.debug("Login response status: %s", response.status)
+            payload = {
+                **self._get_base_payload(),
+                "email": email.lower(),
+                "password": password_hash,
+            }
 
-                try:
-                    data = await response.json()
-                except Exception:
-                    _LOGGER.error("Failed to parse response: %s", response_text[:500])
-                    raise WyzeApiError(f"Invalid response from Wyze API")
+            try:
+                async with session.post(
+                    f"{WYZE_AUTH_URL}{PATH_LOGIN}",
+                    json=payload,
+                    headers=self._get_headers(),
+                ) as response:
+                    response_text = await response.text()
+                    _LOGGER.debug("Login response status: %s", response.status)
 
-                _LOGGER.debug("Login response code: %s, msg: %s",
-                            data.get("code"), data.get("msg", data.get("message")))
+                    try:
+                        data = await response.json()
+                    except Exception:
+                        _LOGGER.error("Failed to parse response: %s", response_text[:500])
+                        continue
 
-                # Check for success - Wyze uses various success indicators
-                code = str(data.get("code", ""))
-                if code not in ("1", "0", ""):
-                    msg = data.get("msg") or data.get("message") or "Login failed"
-                    _LOGGER.error("Login failed with code %s: %s", code, msg)
-                    raise WyzeAuthError(msg, code=int(code) if code.isdigit() else None)
+                    _LOGGER.debug("Login response: %s", data)
 
-                result = data.get("data", data)
-                self._access_token = result.get("access_token")
-                self._refresh_token = result.get("refresh_token")
+                    # Check for success
+                    if "access_token" in data:
+                        self._access_token = data["access_token"]
+                        self._refresh_token = data.get("refresh_token")
+                        _LOGGER.debug("Login successful with format %d", i + 1)
+                        return {
+                            "access_token": self._access_token,
+                            "refresh_token": self._refresh_token,
+                            "user_id": data.get("user_id"),
+                        }
 
-                if not self._access_token:
-                    _LOGGER.error("No access token in response: %s", data)
-                    raise WyzeAuthError("No access token received")
+                    # Check nested data structure
+                    result = data.get("data", {})
+                    if result.get("access_token"):
+                        self._access_token = result["access_token"]
+                        self._refresh_token = result.get("refresh_token")
+                        _LOGGER.debug("Login successful with format %d", i + 1)
+                        return {
+                            "access_token": self._access_token,
+                            "refresh_token": self._refresh_token,
+                            "user_id": result.get("user_id"),
+                        }
 
-                _LOGGER.debug("Login successful, got access token")
-                return {
-                    "access_token": self._access_token,
-                    "refresh_token": self._refresh_token,
-                    "user_id": result.get("user_id"),
-                }
+                    # Store error for last attempt
+                    error_msg = data.get("description") or data.get("msg") or data.get("message") or "Login failed"
+                    error_code = data.get("errorCode") or data.get("code")
+                    last_error = (error_msg, error_code)
+                    _LOGGER.debug("Login attempt %d failed: %s", i + 1, error_msg)
 
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Connection error during login: %s", err)
-            raise WyzeApiError(f"Connection error: {err}") from err
+            except aiohttp.ClientError as err:
+                _LOGGER.error("Connection error during login: %s", err)
+                last_error = (str(err), None)
+                continue
+
+        # All attempts failed
+        error_msg, error_code = last_error or ("Login failed", None)
+        _LOGGER.error("All login attempts failed. Last error: %s", error_msg)
+        raise WyzeAuthError(error_msg, code=int(error_code) if error_code and str(error_code).isdigit() else None)
 
     async def refresh_tokens(self) -> dict[str, Any]:
         """Refresh the access token."""
