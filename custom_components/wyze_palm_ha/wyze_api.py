@@ -284,14 +284,50 @@ class WyzeApiClient:
         devices = await self.get_devices()
         locks = []
 
+        _LOGGER.debug("Found %d total devices", len(devices))
+
         for device in devices:
             product_type = device.get("product_type", "")
             product_model = device.get("product_model", "")
+            nickname = device.get("nickname", "")
+            mac = device.get("mac", device.get("device_mac", ""))
 
-            # Filter for lock devices
-            if "lock" in product_type.lower() or "lock" in product_model.lower():
+            _LOGGER.debug(
+                "Device: %s (MAC: %s) - type: %s, model: %s",
+                nickname, mac, product_type, product_model
+            )
+
+            # Known Wyze lock product models:
+            # - WLCK1: Wyze Lock
+            # - WLCKB1: Wyze Lock Bolt
+            # - YD.LO1: Wyze Lock (Yale variant)
+            # - LD_SS1: Wyze Lock
+            # Wyze Palm Lock may use similar patterns
+            lock_models = ["wlck", "lock", "yd.lo", "ld_ss", "palm"]
+            lock_types = ["lock", "smart_lock", "door_lock"]
+
+            is_lock = False
+
+            # Check product model
+            model_lower = product_model.lower()
+            for lock_model in lock_models:
+                if lock_model in model_lower:
+                    is_lock = True
+                    break
+
+            # Check product type
+            if not is_lock:
+                type_lower = product_type.lower()
+                for lock_type in lock_types:
+                    if lock_type in type_lower:
+                        is_lock = True
+                        break
+
+            if is_lock:
+                _LOGGER.info("Found lock device: %s (MAC: %s, model: %s)", nickname, mac, product_model)
                 locks.append(device)
 
+        _LOGGER.debug("Found %d lock devices", len(locks))
         return locks
 
     async def get_lock_info(self, device_mac: str, device_model: str) -> dict[str, Any]:
