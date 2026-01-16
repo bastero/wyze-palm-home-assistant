@@ -308,10 +308,11 @@ class WyzeApiClient:
             # Known Wyze lock product models:
             # - WLCK1: Wyze Lock
             # - WLCKB1: Wyze Lock Bolt
-            # - WPLCK1: Wyze Palm Lock
+            # - WPLCK1: Wyze Palm Lock (SKU)
+            # - DX_PVLOC: Wyze Palm Lock (API model)
             # - YD.LO1: Wyze Lock (Yale variant)
             # - LD_SS1: Wyze Lock
-            lock_models = ["wlck", "wplck", "lock", "yd.lo", "ld_ss", "palm"]
+            lock_models = ["wlck", "wplck", "pvloc", "dx_pvloc", "lock", "yd.lo", "ld_ss", "palm"]
             lock_types = ["lock", "smart_lock", "door_lock"]
 
             is_lock = False
