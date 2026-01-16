@@ -276,15 +276,19 @@ class WyzeApiClient:
 
     async def get_devices(self) -> list[dict[str, Any]]:
         """Get list of all devices."""
+        _LOGGER.info("Fetching device list from Wyze API...")
         data = await self._api_request(PATH_GET_OBJECT_LIST)
-        return data.get("device_list", [])
+        device_list = data.get("device_list", [])
+        if not device_list:
+            _LOGGER.warning("Wyze API returned empty device list. Raw response keys: %s", list(data.keys()) if data else "None")
+        return device_list
 
     async def get_locks(self) -> list[dict[str, Any]]:
         """Get list of lock devices."""
         devices = await self.get_devices()
         locks = []
 
-        _LOGGER.debug("Found %d total devices", len(devices))
+        _LOGGER.info("Wyze API returned %d total devices", len(devices))
 
         for device in devices:
             product_type = device.get("product_type", "")
@@ -292,18 +296,18 @@ class WyzeApiClient:
             nickname = device.get("nickname", "")
             mac = device.get("mac", device.get("device_mac", ""))
 
-            _LOGGER.debug(
-                "Device: %s (MAC: %s) - type: %s, model: %s",
+            _LOGGER.info(
+                "Wyze device: %s (MAC: %s) - type: '%s', model: '%s'",
                 nickname, mac, product_type, product_model
             )
 
             # Known Wyze lock product models:
             # - WLCK1: Wyze Lock
             # - WLCKB1: Wyze Lock Bolt
+            # - WPLCK1: Wyze Palm Lock
             # - YD.LO1: Wyze Lock (Yale variant)
             # - LD_SS1: Wyze Lock
-            # Wyze Palm Lock may use similar patterns
-            lock_models = ["wlck", "lock", "yd.lo", "ld_ss", "palm"]
+            lock_models = ["wlck", "wplck", "lock", "yd.lo", "ld_ss", "palm"]
             lock_types = ["lock", "smart_lock", "door_lock"]
 
             is_lock = False
@@ -324,10 +328,14 @@ class WyzeApiClient:
                         break
 
             if is_lock:
-                _LOGGER.info("Found lock device: %s (MAC: %s, model: %s)", nickname, mac, product_model)
+                _LOGGER.warning("Found Wyze lock: %s (MAC: %s, model: %s)", nickname, mac, product_model)
                 locks.append(device)
 
-        _LOGGER.debug("Found %d lock devices", len(locks))
+        if not locks:
+            _LOGGER.warning("No Wyze lock devices found out of %d total devices", len(devices))
+        else:
+            _LOGGER.info("Found %d Wyze lock device(s)", len(locks))
+
         return locks
 
     async def get_lock_info(self, device_mac: str, device_model: str) -> dict[str, Any]:
