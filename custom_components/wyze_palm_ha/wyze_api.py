@@ -372,27 +372,45 @@ class WyzeApiClient:
         result = {}
         property_list = data.get("property_list", [])
 
+        _LOGGER.debug("Parsing property list: %s", property_list)
+
         for prop in property_list:
             pid = prop.get("pid")
             value = prop.get("value")
 
-            if pid == "P3":  # Lock state
-                result["is_locked"] = value == "1"
-            elif pid == "P5":  # Door state
+            # Skip unknown/unavailable values (-1 typically means not reported)
+            if value == "-1":
+                _LOGGER.debug("Property %s has unknown value (-1)", pid)
+                continue
+
+            if pid == "P3":  # Lock state: 0=unlocked, 1=locked, 2=unknown
+                if value == "1":
+                    result["is_locked"] = True
+                elif value == "0":
+                    result["is_locked"] = False
+                # else leave it unset (unknown)
+            elif pid == "P5":  # Door state: 0=closed, 1=open
                 result["door_open"] = value == "1"
-            elif pid == "P8":  # Battery
+            elif pid == "P8":  # Battery percentage
                 try:
-                    result["battery"] = int(value)
+                    battery = int(value)
+                    if battery >= 0:  # Only set if valid
+                        result["battery"] = battery
                 except (ValueError, TypeError):
                     pass
             elif pid == "P1":  # Online status
                 result["online"] = value == "1"
-            elif pid == "P1301":  # Auto-lock time
+            elif pid == "P1301":  # Auto-lock time in seconds
                 try:
                     result["auto_lock_time"] = int(value)
                 except (ValueError, TypeError):
                     pass
+            elif pid == "P2001":  # Palm Lock specific - might be palm status
+                _LOGGER.debug("Palm property P2001: %s", value)
+            elif pid == "P2002":  # Palm Lock specific
+                _LOGGER.debug("Palm property P2002: %s", value)
 
+        _LOGGER.debug("Parsed lock info: %s", result)
         return result
 
     async def get_lock_events(
