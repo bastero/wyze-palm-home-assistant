@@ -288,18 +288,22 @@ class WyzeApiClient:
         devices = await self.get_devices()
         locks = []
 
-        _LOGGER.info("Wyze API returned %d total devices", len(devices))
+        # Log all devices for debugging
+        device_summary = []
+        for device in devices:
+            product_type = device.get("product_type", "")
+            product_model = device.get("product_model", "")
+            nickname = device.get("nickname", "")
+            mac = device.get("mac", device.get("device_mac", ""))
+            device_summary.append(f"{nickname} (model={product_model}, type={product_type}, mac={mac})")
+
+        _LOGGER.warning("Wyze devices found: %s", device_summary)
 
         for device in devices:
             product_type = device.get("product_type", "")
             product_model = device.get("product_model", "")
             nickname = device.get("nickname", "")
             mac = device.get("mac", device.get("device_mac", ""))
-
-            _LOGGER.info(
-                "Wyze device: %s (MAC: %s) - type: '%s', model: '%s'",
-                nickname, mac, product_type, product_model
-            )
 
             # Known Wyze lock product models:
             # - WLCK1: Wyze Lock
@@ -333,8 +337,6 @@ class WyzeApiClient:
 
         if not locks:
             _LOGGER.warning("No Wyze lock devices found out of %d total devices", len(devices))
-        else:
-            _LOGGER.info("Found %d Wyze lock device(s)", len(locks))
 
         return locks
 
