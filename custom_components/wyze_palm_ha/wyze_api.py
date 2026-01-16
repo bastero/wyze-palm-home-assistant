@@ -279,11 +279,9 @@ class WyzeApiClient:
 
     async def get_devices(self) -> list[dict[str, Any]]:
         """Get list of all devices."""
-        _LOGGER.info("Fetching device list from Wyze API...")
         data = await self._api_request(PATH_GET_OBJECT_LIST)
         device_list = data.get("device_list", [])
-        if not device_list:
-            _LOGGER.warning("Wyze API returned empty device list. Raw response keys: %s", list(data.keys()) if data else "None")
+        _LOGGER.debug("Fetched %d devices from Wyze API", len(device_list))
         return device_list
 
     async def get_locks(self) -> list[dict[str, Any]]:
@@ -300,7 +298,7 @@ class WyzeApiClient:
             mac = device.get("mac", device.get("device_mac", ""))
             device_summary.append(f"{nickname} (model={product_model}, type={product_type}, mac={mac})")
 
-        _LOGGER.warning("Wyze devices found: %s", device_summary)
+        _LOGGER.debug("Wyze devices found: %s", device_summary)
 
         for device in devices:
             product_type = device.get("product_type", "")
@@ -336,12 +334,11 @@ class WyzeApiClient:
                         break
 
             if is_lock:
-                _LOGGER.warning("Found Wyze lock: %s (MAC: %s, model: %s)", nickname, mac, product_model)
-                _LOGGER.warning("Full lock device data: %s", device)
+                _LOGGER.info("Found Wyze lock: %s (MAC: %s, model: %s)", nickname, mac, product_model)
                 locks.append(device)
 
         if not locks:
-            _LOGGER.warning("No Wyze lock devices found out of %d total devices", len(devices))
+            _LOGGER.debug("No Wyze lock devices found out of %d total devices", len(devices))
 
         return locks
 
@@ -351,7 +348,7 @@ class WyzeApiClient:
         try:
             lock_status = await self._get_lock_status(device_mac)
             if lock_status:
-                _LOGGER.warning("Lock status API response for %s: %s", device_mac, lock_status)
+                _LOGGER.debug("Lock status API response for %s: %s", device_mac, lock_status)
                 return lock_status
         except WyzeApiError as err:
             _LOGGER.debug("Lock status API failed: %s", err)
@@ -364,10 +361,10 @@ class WyzeApiClient:
 
         try:
             data = await self._api_request(PATH_GET_LOCK_INFO, payload)
-            _LOGGER.warning("Lock property list for %s: %s", device_mac, data)
+            _LOGGER.debug("Lock property list for %s: %s", device_mac, data)
             return self._parse_property_list(data)
         except WyzeApiError as err:
-            _LOGGER.warning("get_property_list failed for %s: %s, trying get_device_info", device_mac, err)
+            _LOGGER.debug("get_property_list failed for %s: %s, trying get_device_info", device_mac, err)
             return await self.get_device_info(device_mac, device_model)
 
     async def _get_lock_status(self, device_mac: str) -> dict[str, Any] | None:
@@ -401,7 +398,7 @@ class WyzeApiClient:
 
                     # Log successful responses
                     if response.status == 200 and data.get("code") in (None, "1", 1, "0", 0):
-                        _LOGGER.warning("Lock API %s response: %s", endpoint, data)
+                        _LOGGER.debug("Lock API %s response: %s", endpoint, data)
 
                         # Try to parse any useful data
                         result = self._parse_lock_response(data)
@@ -456,7 +453,7 @@ class WyzeApiClient:
         }
 
         data = await self._api_request(PATH_GET_DEVICE_INFO, payload)
-        _LOGGER.warning("Device info raw response for %s: %s", device_mac, data)
+        _LOGGER.debug("Device info response for %s: %s", device_mac, data)
         return data
 
     def _parse_property_list(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -525,13 +522,10 @@ class WyzeApiClient:
         try:
             data = await self._api_request(PATH_GET_EVENT_LIST, payload)
             events = data.get("event_list", [])
-            if events:
-                _LOGGER.warning("Lock events for %s: %s", device_mac, events[:3])  # Log first 3
-            else:
-                _LOGGER.warning("No events returned for lock %s (response: %s)", device_mac, data)
+            _LOGGER.debug("Lock events for %s: %d events", device_mac, len(events))
             return events
         except WyzeApiError as err:
-            _LOGGER.warning("Failed to get events for %s: %s", device_mac, err)
+            _LOGGER.debug("Failed to get events for %s: %s", device_mac, err)
             return []
 
     async def lock(self, device_mac: str, device_model: str) -> bool:
